@@ -16,34 +16,85 @@ import sys
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
         global root
-        cur_thread = threading.current_thread()
         
+        localScope = {}
+        cur_thread = threading.current_thread()
         print("ThreadedTCPRequestHandler thread #" + str(cur_thread))
         while True:
             try:
                 cmd = self.request.recv(1024)
                 try:
-                    print(cmd)
                     cmdStr = gzip.decompress(cmd).decode()
-                    print(cmdStr)
                     if not cmdStr:
                         break
                     cmdJson = json.loads(cmdStr)
-                    payloadsize = cmdJson["size"]
-                    table = cmdJson["table"]
-                    
-                    data = gzip.decompress(self.request.recv(payloadsize)).decode()
-                    print(data)
-                    #data = json.loads(data)
-                    df = pd.read_json(data)
-                    print(df.to_json())
-                    root[table]  = df
-                except:
-                    print("Unexpected error:" + str(sys.exc_info()[0]))
-            except:
-                print("Unexpected error:" + str(sys.exc_info()[0]))
-                break
+                    try:
+                        action = cmdJson["cmd"]
+                        table = cmdJson["table"]
+                        format = cmdJson["format"]
+                        scope = cmdJson["scope"]
+                        payloadsize = cmdJson["size"]
+                    except:
+                        self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
+                        continue
+                    self.request.sendall("OK".encode())
+                    if payloadsize > 0:
+                        payload = self.request.recv(payloadsize)
+                        if len(payload) != payloadsize:
+                            self.request.sendall("NOK:payload is corrupt".encode())
+                            continue
+                        data = gzip.decompress(payload).decode()
 
+                    if action == "insert":
+                        if format == "json":
+                            df = pd.read_json(data)
+                        else:
+                            df = df.read_csv(data)                    
+                        if scope == "global":
+                            context = root
+                        else:
+                            context = localScope
+                        context[table]  = df
+                    elif action == "execute":
+                        try:
+                            exec(data)
+                        except:
+                            self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
+                            continue
+                    elif action == "query":
+                        try:
+                            df = eval(data)
+                            if df.empty: 
+                                m ='{"size": 0, "status": "OK"}'
+                                self.request.sendall(m.encode())
+                            else:
+                                payload = gzip.compress(df.to_json().encode())
+                                m = '{"status": "OK", "size": ' + str(len(payload)) + '}'
+                                self.request.sendall(m.encode())
+                                self.request.sendall(payload)
+                        except:
+                            self.request.sendall(('{"size": 0, "status": "NOK:' + str(sys.exc_info()[0]) + '"}').encode())
+                            continue
+                    elif action == "delete":
+                        try:
+                            if scope == "global":
+                                context = root
+                            else:
+                                context = localScope
+                            df = context.pop(table)                            
+                        except:
+                            self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
+                            continue
+                    else:
+                        pass
+                    self.request.sendall("OK".encode())
+                except:
+                    self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
+            except:
+                print("ThreadedTCPRequestHandler thread #" + str(sys.exc_info()[0]))
+                break
+        print("ThreadedTCPRequestHandler thread #" + str(cur_thread) + " is exiting")
+              
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
         

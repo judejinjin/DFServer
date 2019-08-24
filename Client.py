@@ -29,42 +29,86 @@ async def tcp_echo_client(message, loop):
         
     print('Close the socket')
     writer.close()
-
-def connect(ip, port):
-    global sock
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((ip, port))
-    '''
-    while True:
-        try:
-            sock.sendall(bytes(message, 'ascii'))
-        except:
-            break
-        time.sleep(1)
-    '''     
-        
-'''
-name: table name
-data: data in json format
-def insert(name, data):
-    global writer, reader
-    content = {}
-    content['cmd'] = 'insert'
-    content['data'] = data
-    tosend = json.dumps(content).encode()
-    header = 'SU' + tosend.count()
-    header = header.encode()
-    print(header.count())
-    writer.write(header)
-    writer.write(tosend)
-'''
-
+    
 async def main():
     global mainEventLoop
     global reader
     global writer
     reader, writer = await asyncio.open_connection('127.0.0.1', 8888, loop=mainEventLoop)
+
+def connect(ip, port):
+    global sock
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((ip, port))
+
+def insert(sock, t):
+    payload = gzip.compress(t.to_json().encode())
+    m ='{"cmd": "insert", "table": "bidask", "scope": "global", "format": "json", "size":'  + str(len(payload)) + '}'
+    sock.sendall(gzip.compress(m.encode()))
+    resp = sock.recv(1024)
+    if not resp:
+        return "NOK"
+    resp = resp.decode()
+    if resp != "OK":
+        return resp
+    sock.sendall(payload)
+    resp = sock.recv(1024)
+    if not resp:
+        return "NOK"
+    resp = resp.decode()
+    return resp
+
     
+def delete(sock, t):
+    m ='{"cmd": "delete", "table": "bidask", "scope": "global", "format": "json", "size": 0}'
+    sock.sendall(gzip.compress(m.encode()))
+    resp = sock.recv(1024)
+    if not resp:
+        return "NOK"
+    resp = resp.decode()
+    return resp
+
+def execute(sock, script):
+    payload = gzip.compress(script.encode())
+    m ='{"cmd": "execute", "table": "bidask", "scope": "global", "format": "json", "size":'  + str(len(payload)) + '}'
+    sock.sendall(gzip.compress(m.encode()))
+    resp = sock.recv(1024)
+    if not resp:
+        return "NOK"
+    resp = resp.decode()
+    if resp != "OK":
+        return resp
+    sock.sendall(payload)
+    resp = sock.recv(1024)
+    if not resp:
+        return "NOK"
+    resp = resp.decode()
+    return resp
+
+def query(sock, query):
+    payload = gzip.compress(query.encode())
+    m ='{"cmd": "query", "table": "bidask", "scope": "global", "format": "json", "size":'  + str(len(payload)) + '}'
+    sock.sendall(gzip.compress(m.encode()))
+    resp = sock.recv(1024)
+    if not resp:
+        return None
+    resp = resp.decode()
+    if resp != "OK":
+        return None
+    
+    sock.sendall(payload)
+    resp = sock.recv(1024)
+    resp = json.loads(resp.decode())
+    if not resp:
+        return None
+    status = resp["status"]
+    if status == "OK" and resp["size"] > 0:
+        dfJson = sock.recv(resp["size"])
+        data = gzip.decompress(dfJson).decode()
+        df = pd.read_json(data)
+        return df
+    return None
+
 if __name__ == "__main__":
     #mainEventLoop = asyncio.get_event_loop()
     #mainEventLoop.run_until_complete(main())
@@ -73,20 +117,16 @@ if __name__ == "__main__":
     #loop = asyncio.get_event_loop()
     #loop.run_until_complete(tcp_echo_client(message, loop))
     #loop.close()
+
     connect('127.0.0.1', 8888)
-    N = 2 * 2
+    N = 1000 * 1000
     t = pd.DataFrame({
             'pA':[np.random.randint(0, 5, N)],
             'pB':[np.random.randint(0, 5, N)],
             'sA':[np.random.randint(0, 100, N)],
             'sB':[np.random.randint(0, 100, N)]})
-    print(t.to_json())
-    payload = gzip.compress(t.to_json().encode())
-    print('payload length is ' + str(len(payload)))
-    m ='{"cmd": "insert", "table": "bidask", "size":'  + str(len(payload)) + '}'
-    print(gzip.compress(m.encode()))
-    sock.sendall(gzip.compress(m.encode()))
-    sock.sendall(payload)
-    print(gzip.decompress(payload).decode())
-    
+    print(insert(sock, t))
+    #print(delete(sock, 'bidask'))
+    #print(execute(sock, 'root.pop("bidask")'))
+    print(query(sock, 'root["bidask"].query("pA>pB")'))
     
