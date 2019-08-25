@@ -13,6 +13,39 @@ import json
 import gzip
 import sys
 
+class ThreadedPubSubHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        global pubsub
+        global pubvalues
+        
+        cur_thread = threading.current_thread()
+        print("ThreadedPubSubHandler thread #" + str(cur_thread))
+        while True:
+            try:
+                cmd = self.request.recv(1024)
+                if not cmd:
+                    break
+                try:
+                    print("ThreadedPubSubHandler thread #" + cmd.decode())
+                    cmdJson = json.loads(cmd.decode())
+                    topic = cmdJson["topic"]
+                    if topic not in pubsub:
+                        pubsub[topic] = []
+                    subscribers = pubsub[topic]
+                    subscribers.append(self.request)
+                    if topic not in pubvalues:
+                        pubvalues[topic] = 0
+                    else:
+                        pub = '{topic": "' + topic + '", "value": ' + str(pubvalues[topic]) + '}'
+                        self.request.sendall(pub.encode())
+                except:
+                    print("NOK:" + str(sys.exc_info()[0]))
+                    continue
+            except:
+                print("ThreadedPubSubHandler thread #" + str(sys.exc_info()[0]))
+                break
+        print("ThreadedPubSubHandler thread #" + str(cur_thread) + " is exiting")
+        
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
         global root
@@ -30,6 +63,27 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                     cmdJson = json.loads(cmdStr)
                     try:
                         action = cmdJson["cmd"]
+                    except:
+                        self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
+                        continue
+                    if action == "publish":
+                        try:
+                            topic = cmdJson["topic"]
+                            value = cmdJson["value"]
+                            subscribers = pubsub[topic]
+                            pubvalues[topic] = value
+                            pub = '{topic": "' + topic + '", "value": ' + str(value) + '}'
+                            for i in subscribers[:]:
+                                try:
+                                    i.sendall(pub.encode())
+                                except:
+                                    print("removing " + str(i))
+                                    subscribers.remove(i)
+                            continue
+                        except:
+                            self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
+                            continue
+                    try:
                         table = cmdJson["table"]
                         format = cmdJson["format"]
                         scope = cmdJson["scope"]
@@ -55,9 +109,11 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                         else:
                             context = localScope
                         context[table]  = df
+                        self.request.sendall("OK".encode())
                     elif action == "execute":
                         try:
                             exec(data)
+                            self.request.sendall("OK".encode())
                         except:
                             self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
                             continue
@@ -81,13 +137,13 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                                 context = root
                             else:
                                 context = localScope
-                            df = context.pop(table)                            
+                            df = context.pop(table)    
+                            self.request.sendall("OK".encode())
                         except:
                             self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
                             continue
                     else:
                         pass
-                    self.request.sendall("OK".encode())
                 except:
                     self.request.sendall(("NOK:" + str(sys.exc_info()[0])).encode())
             except:
@@ -100,17 +156,19 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         
 if __name__ == "__main__":
     root = {}
+    pubsub = {}
+    pubvalues = {}
     # Port 0 means to select an arbitrary unused port
     HOST, PORT = "127.0.0.1", 8888
-
-    server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
-    
-    ip, port = server.server_address
-
-    # Start a thread with the server -- that thread will then start one
-    # more thread for each request
+    server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)    
     server_thread = threading.Thread(target=server.serve_forever)
-    # Exit the server thread when the main thread terminates
     server_thread.daemon = True
     server_thread.start()
     print("Server loop running in thread:", server_thread.name)
+    
+    HOST2, PORT2 = "127.0.0.1", 8889
+    server2 = ThreadedTCPServer((HOST2, PORT2), ThreadedPubSubHandler)    
+    server_thread2 = threading.Thread(target=server2.serve_forever)
+    server_thread2.daemon = True
+    server_thread2.start()
+    print("Server loop running in thread:", server_thread2.name)

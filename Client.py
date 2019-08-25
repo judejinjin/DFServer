@@ -13,6 +13,8 @@ import json
 import socket
 import gzip
 import json
+import threading
+import sys
 
 async def tcp_echo_client(message, loop):
     reader, writer = await asyncio.open_connection('127.0.0.1', 8888,
@@ -37,9 +39,9 @@ async def main():
     reader, writer = await asyncio.open_connection('127.0.0.1', 8888, loop=mainEventLoop)
 
 def connect(ip, port):
-    global sock
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((ip, port))
+    return sock
 
 def insert(sock, t):
     payload = gzip.compress(t.to_json().encode())
@@ -109,6 +111,27 @@ def query(sock, query):
         return df
     return None
 
+def PubRecv():
+    global subSock
+    while True:
+        try:
+            resp = subSock.recv(1024)
+            if not resp:
+                break
+            try:
+                resp = json.loads(resp.decode())
+                print(resp)
+            except:
+                print("PubRecv:" + resp.decode())
+        except:
+            print("publisher died:" + str(sys.exc_info()[0]))
+            break
+
+def subscribe(topic):
+    global subSock
+    request = '{"topic":"' + topic + '"}'
+    subSock.sendall(request.encode());
+    
 if __name__ == "__main__":
     #mainEventLoop = asyncio.get_event_loop()
     #mainEventLoop.run_until_complete(main())
@@ -118,8 +141,8 @@ if __name__ == "__main__":
     #loop.run_until_complete(tcp_echo_client(message, loop))
     #loop.close()
 
-    connect('127.0.0.1', 8888)
-    N = 1000 * 1000
+    sock = connect('127.0.0.1', 8888)
+    N = 100 * 100
     t = pd.DataFrame({
             'pA':[np.random.randint(0, 5, N)],
             'pB':[np.random.randint(0, 5, N)],
@@ -129,4 +152,15 @@ if __name__ == "__main__":
     #print(delete(sock, 'bidask'))
     #print(execute(sock, 'root.pop("bidask")'))
     print(query(sock, 'root["bidask"].query("pA>pB")'))
+    
+    subSock = connect('127.0.0.1', 8889)
+    subThread = threading.Thread(target=PubRecv)
+    subThread.daemon = True
+    subThread.start()
+    print("subscribing to test")
+    subscribe("test")
+    pubCmd = '{"cmd": "publish", "topic": "test", "value": 99}'
+    sock.sendall(gzip.compress(pubCmd.encode()))
+    pubCmd = '{"cmd": "publish", "topic": "test", "value": 199}'
+    sock.sendall(gzip.compress(pubCmd.encode()))
     
